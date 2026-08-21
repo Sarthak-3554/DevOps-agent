@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from agent.executor import Executor
 from models.tool_call import ToolCall
@@ -16,8 +16,6 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("Unknown tool", result.error)
 
     def test_invalid_arguments_return_failure_not_exception(self):
-        # git_status takes no arguments — this mirrors the real hallucinated
-        # call we saw in practice ({'branch': None, 'remote': None}).
         call = ToolCall(
             id="call_1",
             tool="git_status",
@@ -50,8 +48,6 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("aborted", result.error.lower())
 
     def test_unrecognized_shell_command_also_requires_confirmation(self):
-        # Not on the safe allowlist, but not obviously destructive either
-        # — this is the default-deny case the allowlist model is for.
         call = ToolCall(id="call_1", tool="run_shell", arguments={"command": "curl https://example.com"})
 
         result = Executor.execute(call, confirm_fn=lambda *args: False)
@@ -101,6 +97,55 @@ class ExecutorTests(unittest.TestCase):
         result = Executor.execute(call, confirm_fn=confirm_should_not_be_called)
 
         self.assertTrue(result.success)
+
+    @patch("agent.executor.TOOLS")
+    def test_logs_tool_call_with_correct_confirmation_details(self, mock_tools):
+        mock_tool = mock_tools.__getitem__.return_value
+        mock_tool.run.return_value = ToolResult(success=True, output="pushed")
+        mock_tools.__contains__.return_value = True
+
+        mock_logger = MagicMock()
+        call = ToolCall(id="call_1", tool="git_push", arguments={"remote": "origin", "branch": "main"})
+
+        Executor.execute(
+            call,
+            confirm_fn=lambda *args: True,
+            logger=mock_logger,
+            session_id="sess_1",
+        )
+
+        mock_logger.log_tool_call.assert_called_once()
+        _, kwargs = mock_logger.log_tool_call.call_args
+        self.assertEqual(kwargs["session_id"], "sess_1")
+        self.assertEqual(kwargs["tool"], "git_push")
+        self.assertTrue(kwargs["required_confirmation"])
+        self.assertTrue(kwargs["confirmed"])
+        self.assertTrue(kwargs["success"])
+        self.assertFalse(kwargs["sandboxed"])  # git_push runs directly, not via Sandbox
+
+    @patch("agent.executor.TOOLS")
+    def test_logs_blocked_confirmation_correctly(self, mock_tools):
+        mock_tools.__contains__.return_value = True
+        mock_logger = MagicMock()
+
+        call = ToolCall(id="call_1", tool="git_push", arguments={"remote": "origin", "branch": "main"})
+
+        Executor.execute(
+            call,
+            confirm_fn=lambda *args: False,
+            logger=mock_logger,
+            session_id="sess_1",
+        )
+
+        _, kwargs = mock_logger.log_tool_call.call_args
+        self.assertTrue(kwargs["required_confirmation"])
+        self.assertFalse(kwargs["confirmed"])
+        self.assertFalse(kwargs["success"])
+
+    def test_no_logging_error_when_logger_is_none(self):
+        call = ToolCall(id="call_1", tool="does_not_exist", arguments={})
+        result = Executor.execute(call)
+        self.assertFalse(result.success)
 
 
 if __name__ == "__main__":

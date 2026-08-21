@@ -31,6 +31,18 @@ The agent figures out which command to run and does it for you.
   tries a fix on its own.
 - **Works with multiple AI providers** — OpenAI, Groq, Anthropic, etc. Just
   change one line in the config.
+  
+## Audit logging
+
+Every LLM call and tool execution is logged as structured JSON (one
+object per line) to `storage/logs/audit.jsonl` — this is a permanent,
+queryable record, since terminal output disappears once a session ends.
+Each entry is tagged with a `session_id` shared across all calls within
+one `agent.run()` invocation, so a single user request's full trace
+(every LLM call, every tool call, confirmation given or denied, success/
+failure, latency) can be reconstructed after the fact. Logging lives
+inside `Executor.execute()` rather than the caller, since that's where
+confirmation details actually exist.
 
 ## Setup
 
@@ -69,9 +81,7 @@ Then just type what you want:
 
 ## What's not done yet
 
-- No logging/history of past commands yet.
 - No automated test suite that scores the agent's accuracy — just manual
   testing and unit tests so far.
 - No memory between separate runs — each time you start `main.py`, it
   starts fresh.
-- Only 5 retires

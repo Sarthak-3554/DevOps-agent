@@ -1,6 +1,8 @@
 import json
+import time
 
 from agent.executor import Executor
+from agent.logger import AuditLogger, new_session_id
 from llm.factory import get_llm
 from prompts import SYSTEM_PROMPT
 from tools.registry import TOOL_SCHEMAS
@@ -30,9 +32,11 @@ def _truncate_for_model(text: str) -> str:
 class Agent:
     def __init__(self):
         self.llm = get_llm()
+        self.logger = AuditLogger()
 
     def run(self, user_input: str):
         MAX_ITERATIONS = 5
+        session_id = new_session_id()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_input},
@@ -41,7 +45,18 @@ class Agent:
         for iteration in range(MAX_ITERATIONS):
             print(f"\n🧠 Iteration {iteration + 1}")
 
+            start = time.monotonic()
             response = self.llm.chat(messages, tools=TOOL_SCHEMAS)
+            duration_ms = (time.monotonic() - start) * 1000
+
+            self.logger.log_llm_call(
+                session_id=session_id,
+                iteration=iteration + 1,
+                model=getattr(self.llm, "model", "unknown"),
+                tool_call_count=len(response.tool_calls),
+                has_final_answer=not response.tool_calls,
+                duration_ms=duration_ms,
+            )
 
             if not response.tool_calls:
                 # This is the ONLY signal we trust for "the task is done":
@@ -79,7 +94,7 @@ class Agent:
             for call in response.tool_calls:
                 print(f"\n🚀 Executing: {call.tool} {call.arguments}")
 
-                result = Executor.execute(call)
+                result = Executor.execute(call, logger=self.logger, session_id=session_id)
                 print("RESULT:", result)
 
                 messages.append({
