@@ -1,9 +1,8 @@
-import subprocess
-
 from pydantic import BaseModel, Field
 
 from models.tool_result import ToolResult
 from tools.base import BaseTool
+from tools.sandbox import Sandbox
 
 
 class ShellArgs(BaseModel):
@@ -13,25 +12,18 @@ class ShellArgs(BaseModel):
 class ShellTool(BaseTool):
     name = "run_shell"
     description = (
-        "Run an arbitrary shell command. Last-resort tool: only use this "
-        "when no specific tool (git_push, git_status, git_checkout, "
+        "Run an arbitrary shell command inside an isolated sandbox "
+        "container (not the host machine). Last-resort tool: only use "
+        "this when no specific tool (git_push, git_status, git_checkout, "
         "git_pull, git_remote_add) already covers the requested action."
     )
     args_schema = ShellArgs
 
+    def __init__(self):
+        # One Sandbox (and one docker client) per ShellTool instance,
+        # reused across calls — each individual command still runs in
+        # its own fresh, disposable container.
+        self._sandbox = Sandbox()
+
     def run(self, command: str) -> ToolResult:
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True
-            )
-
-            if result.returncode == 0:
-                return ToolResult(success=True, output=result.stdout)
-
-            return ToolResult(success=False, output="", error=result.stderr)
-
-        except Exception as e:
-            return ToolResult(success=False, output="", error=str(e))
+        return self._sandbox.run(command)

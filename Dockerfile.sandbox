@@ -1,0 +1,24 @@
+# Base image for the devops-agent's run_shell sandbox.
+#
+# Adds the tools a "DevOps assistant" is actually expected to have on
+# hand (git, curl) so a session doesn't have to apt-get install them
+# from scratch inside a throwaway container — which isn't just slow,
+# it doesn't even work reliably: run_shell spins up a FRESH, disposable
+# container per command (that's what makes it safe — nothing persists
+# between calls), so anything installed in one command's container is
+# already gone by the next one. Baking tools into the image itself is
+# the correct fix, not installing them at runtime.
+#
+# Build once locally:
+#   docker build -t devops-agent-sandbox:latest -f Dockerfile.sandbox .
+#
+# Rebuild after editing this file, or to add more tools.
+
+FROM python:3.12-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
