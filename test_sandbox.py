@@ -95,6 +95,38 @@ class SandboxTests(unittest.TestCase):
         self.assertFalse(result.success)
         mock_container.remove.assert_called_once_with(force=True)
 
+    @patch.dict("os.environ", {"GIT_AUTHOR_NAME": "Sarthak", "GIT_AUTHOR_EMAIL": "sarthak@example.com"})
+    @patch("tools.sandbox.docker.from_env")
+    def test_git_identity_env_vars_are_passed_to_every_container(self, mock_from_env):
+        # Regression test for the real issue: `git config --global` run
+        # inside one container doesn't survive into the next disposable
+        # container, so every git commit kept failing with "Author
+        # identity unknown". The fix is passing identity as env vars on
+        # each container run instead of relying on a config file persisting.
+        import importlib
 
+        import tools.sandbox as sandbox_module
+        importlib.reload(sandbox_module)  # picks up the patched env vars
+
+        mock_client = MagicMock()
+        mock_from_env.return_value = mock_client
+
+        mock_container = MagicMock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_container.logs.return_value = b"[main abc1234] Readme updated\n"
+        mock_client.containers.run.return_value = mock_container
+
+        sandbox = sandbox_module.Sandbox()
+        sandbox.run('git commit -m "Readme updated"')
+
+        _, call_kwargs = mock_client.containers.run.call_args
+        env = call_kwargs.get("environment", {})
+        self.assertEqual(env.get("GIT_AUTHOR_NAME"), "Sarthak")
+        self.assertEqual(env.get("GIT_COMMITTER_NAME"), "Sarthak")
+        self.assertEqual(env.get("GIT_AUTHOR_EMAIL"), "sarthak@example.com")
+        self.assertEqual(env.get("GIT_COMMITTER_EMAIL"), "sarthak@example.com")
+
+        importlib.reload(sandbox_module)  # restore for other tests
+        
 if __name__ == "__main__":
     unittest.main()

@@ -74,3 +74,4 @@ Then just type what you want:
   testing and unit tests so far.
 - No memory between separate runs — each time you start `main.py`, it
   starts fresh.
+- Only 5 retires

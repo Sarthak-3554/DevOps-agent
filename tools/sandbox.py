@@ -3,13 +3,26 @@ from typing import Optional
 
 import docker
 from docker.errors import DockerException, ImageNotFound
+from dotenv import load_dotenv
 
 from models.tool_result import ToolResult
+
+# Load .env here explicitly rather than relying on some other module
+# having already done it first. Import order across the codebase isn't
+# guaranteed (this module's env reads below were previously executing
+# before llm/litellm_provider.py's load_dotenv() call ran, because
+# agent/executor.py — which imports this module — is imported before
+# llm/factory.py in agent/agent.py). Calling it again here is a no-op
+# if already loaded, and safe regardless of import order.
+load_dotenv()
 
 SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "devops-agent-sandbox:latest")
 SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", "60"))
 SANDBOX_MEM_LIMIT = os.getenv("SANDBOX_MEM_LIMIT", "512m")
 SANDBOX_CPU_LIMIT = float(os.getenv("SANDBOX_CPU_LIMIT", "1"))
+
+GIT_AUTHOR_NAME = os.getenv("GIT_AUTHOR_NAME")
+GIT_AUTHOR_EMAIL = os.getenv("GIT_AUTHOR_EMAIL")
 
 
 class Sandbox:
@@ -29,6 +42,12 @@ class Sandbox:
     - The current working directory is mounted read-write at /workspace,
       so repo-relative commands (pytest, npm install, etc.) still work
       against real files.
+    - Git commit identity (GIT_AUTHOR_NAME/EMAIL) is passed in as
+      environment variables on every container, for the same reason as
+      the image point above: `git config --global` run inside one
+      container doesn't survive into the next one, so setting identity
+      via git's own env-var mechanism is the only approach that actually
+      persists across calls without needing a persistent volume.
     - Network is left enabled (see SANDBOX_ALLOW_NETWORK) since package
       installs and API/health checks are core to what this tool is for;
       isolation from the host is the safety boundary here, not isolation
@@ -65,12 +84,21 @@ class Sandbox:
         cwd = os.getcwd()
         container = None
 
+        environment = {}
+        if GIT_AUTHOR_NAME:
+            environment["GIT_AUTHOR_NAME"] = GIT_AUTHOR_NAME
+            environment["GIT_COMMITTER_NAME"] = GIT_AUTHOR_NAME
+        if GIT_AUTHOR_EMAIL:
+            environment["GIT_AUTHOR_EMAIL"] = GIT_AUTHOR_EMAIL
+            environment["GIT_COMMITTER_EMAIL"] = GIT_AUTHOR_EMAIL
+
         try:
             container = self._client.containers.run(
                 SANDBOX_IMAGE,
                 command=["sh", "-c", command],
                 volumes={cwd: {"bind": "/workspace", "mode": "rw"}},
                 working_dir="/workspace",
+                environment=environment,
                 mem_limit=SANDBOX_MEM_LIMIT,
                 nano_cpus=int(SANDBOX_CPU_LIMIT * 1_000_000_000),
                 network_disabled=False,
